@@ -35,7 +35,7 @@ struct CscAccumulator {
     uint16_t lastCrankEventTime  = 0;
     float fractionalWheelRevs = 0.0f;
     float fractionalCrankRevs = 0.0f;
-    static constexpr float WHEEL_CIRCUMFERENCE_M = 2.096f;
+    float wheelCircumferenceM = 2.096f;
 };
 
 inline bool parseFtmsIndoorBikeData(const uint8_t* data, size_t len, FtmsIndoorBikeData& out) {
@@ -100,8 +100,8 @@ inline void updateCsc(CscAccumulator& csc, float speedKmh, float cadenceRpm, uin
     if (speedKmh > 0.0f) {
         float speedMs = speedKmh / 3.6f;
         float distanceM = speedMs * deltaSec;
-        csc.fractionalWheelRevs += distanceM / CscAccumulator::WHEEL_CIRCUMFERENCE_M;
-        float wheelRevsPerSec = speedMs / CscAccumulator::WHEEL_CIRCUMFERENCE_M;
+        csc.fractionalWheelRevs += distanceM / csc.wheelCircumferenceM;
+        float wheelRevsPerSec = speedMs / csc.wheelCircumferenceM;
         uint16_t periodTicks = (uint16_t)(1.0f / wheelRevsPerSec * 1024.0f);
         while (csc.fractionalWheelRevs >= 1.0f) {
             csc.cumulativeWheelRevs++;

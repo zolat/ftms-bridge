@@ -151,6 +151,15 @@ void test_build_cp_measurement() {
     TEST_ASSERT_EQUAL_INT16(200, power);
 }
 
+void test_csc_custom_wheel_circumference() {
+    CscAccumulator csc;
+    csc.wheelCircumferenceM = 1.0f;  // 1 meter wheel = easy math
+    // 3.6 km/h = 1 m/s, so in 1 second we travel 1m = exactly 1 rev
+    updateCsc(csc, 3.6f, 0.0f, 1000);
+    TEST_ASSERT_EQUAL_UINT32(1, csc.cumulativeWheelRevs);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, csc.fractionalWheelRevs);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_parse_too_short);
@@ -169,5 +178,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_build_csc_crank_only);
     RUN_TEST(test_build_csc_wheel_and_crank);
     RUN_TEST(test_build_cp_measurement);
+    RUN_TEST(test_csc_custom_wheel_circumference);
     return UNITY_END();
 }
