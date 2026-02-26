@@ -28,7 +28,7 @@ Plug in the ESP32, start pedaling, and your Watch just sees a bike sensor.
 If you already have PlatformIO installed and know what you're doing:
 
 ```bash
-git clone https://github.com/thomaszola/cycle-bridge.git
+git clone https://github.com/zolat/ftms-bridge.git
 # Edit include/config.h — set BIKE_MAC to your bike's address
 pio run -e esp32dev -t upload
 ```
@@ -95,9 +95,9 @@ pio run -e esp32dev -t upload --upload-port COM3
 
 1. Power on the ESP32 and your bike.
 2. Wait for the LED to go solid (see below).
-3. Open a cycling app on your Watch -- Apple Workouts, Strava, Wahoo, whatever you like.
-4. It should discover **SM420 Bridge** (or whatever you set `BRIDGE_NAME` to).
-5. Pair, and ride!
+3. On your Apple Watch, go to **Settings > Bluetooth** and connect to **SM420 Bridge** (or whatever you set `BRIDGE_NAME` to).
+4. Open a cycling app on your Watch -- Apple Workouts, Strava, Wahoo, whatever you like.
+5. It should pick up speed, cadence, and power automatically. Ride!
 
 
 ## LED Status
