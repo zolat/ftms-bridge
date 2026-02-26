@@ -57,12 +57,19 @@ static void ftmsNotifyCallback(NimBLERemoteCharacteristic* pChar,
         return;
     }
 
-    g_hasSpeed   = bikeData.hasSpeed;
-    g_hasCadence = bikeData.hasCadence;
-    g_hasPower   = bikeData.hasPower;
-    g_speedRaw   = bikeData.instantSpeedRaw;
-    g_cadenceRaw = bikeData.instantCadenceRaw;
-    g_power      = bikeData.instantPower;
+    // Only update fields that are present — bike sends split notifications
+    if (bikeData.hasSpeed) {
+        g_hasSpeed = true;
+        g_speedRaw = bikeData.instantSpeedRaw;
+    }
+    if (bikeData.hasCadence) {
+        g_hasCadence = true;
+        g_cadenceRaw = bikeData.instantCadenceRaw;
+    }
+    if (bikeData.hasPower) {
+        g_hasPower = true;
+        g_power = bikeData.instantPower;
+    }
     g_ftmsDataReady = true;
 
     LOG("FTMS: spd=%.1f km/h  cad=%.0f rpm  pwr=%d W",
@@ -71,12 +78,14 @@ static void ftmsNotifyCallback(NimBLERemoteCharacteristic* pChar,
         bikeData.hasPower   ? bikeData.instantPower  : 0);
 }
 
+// ── Target device (hardcoded SM-420) ──────────────────────────────
+static const NimBLEAddress SM420_ADDRESS("24:00:0c:a0:7c:60");
+
 // ── Scan callbacks ────────────────────────────────────────────────
 class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice* device) override {
-        LOG("Scan: found %s  RSSI=%d", device->getName().c_str(), device->getRSSI());
-        if (device->isAdvertisingService(FTMS_SERVICE_UUID)) {
-            LOG("Scan: FTMS device found! Stopping scan.");
+        if (device->getAddress() == SM420_ADDRESS) {
+            LOG("Scan: found SM-420! RSSI=%d", device->getRSSI());
             NimBLEDevice::getScan()->stop();
             g_targetDevice = device;
             g_doConnect = true;
@@ -141,19 +150,45 @@ static bool connectToFtms() {
         return false;
     }
 
-    if (!pChar->subscribe(true, ftmsNotifyCallback)) {
-        LOG("Failed to subscribe to notifications!");
-        g_pClient->disconnect();
-        return false;
+    // Try acknowledged subscribe (some devices require Write Request for CCCD)
+    if (!pChar->subscribe(true, ftmsNotifyCallback, true)) {
+        LOG("Acknowledged subscribe failed, trying unacknowledged...");
+        if (!pChar->subscribe(true, ftmsNotifyCallback, false)) {
+            LOG("Failed to subscribe to notifications!");
+            g_pClient->disconnect();
+            return false;
+        }
+    }
+    LOG("Subscribed to FTMS Indoor Bike Data");
+
+    // Write to FTMS Control Point to start data flow
+    NimBLERemoteCharacteristic* pCtrl = pService->getCharacteristic(
+        NimBLEUUID((uint16_t)0x2AD9));
+    if (pCtrl) {
+        // Request Control (opcode 0x00)
+        uint8_t reqCtrl[] = {0x00};
+        if (pCtrl->writeValue(reqCtrl, 1, true)) {
+            LOG("FTMS Control: requested control");
+            // Start or Resume (opcode 0x07)
+            uint8_t startCmd[] = {0x07};
+            if (pCtrl->writeValue(startCmd, 1, true)) {
+                LOG("FTMS Control: sent Start command");
+            } else {
+                LOG("FTMS Control: Start command failed");
+            }
+        } else {
+            LOG("FTMS Control: request control failed");
+        }
+    } else {
+        LOG("FTMS Control Point not found (OK, may not be required)");
     }
 
-    LOG("Subscribed to FTMS Indoor Bike Data");
     return true;
 }
 
-// ── Scan for FTMS devices ─────────────────────────────────────────
+// ── Scan for SM-420 ───────────────────────────────────────────────
 static void startScan() {
-    LOG("Scanning for FTMS devices...");
+    LOG("Scanning for SM-420 (%s)...", SM420_ADDRESS.toString().c_str());
     NimBLEScan* pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(new ScanCallbacks(), false);
     pScan->setActiveScan(true);
