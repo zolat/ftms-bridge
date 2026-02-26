@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include "ftms_bridge.h"
+#include "config.h"
 
 #if DEBUG_LOG
   #define LOG(fmt, ...) Serial.printf(fmt "\n", ##__VA_ARGS__)
@@ -41,9 +42,6 @@ static NimBLECharacteristic* g_pCpMeas       = nullptr;
 static volatile bool         g_watchConnected = false;
 static CscAccumulator        g_csc;
 
-// ── LED ───────────────────────────────────────────────────────────
-static const int LED_PIN = 2;
-
 // ── Timing ────────────────────────────────────────────────────────
 static unsigned long g_lastNotify = 0;
 static const unsigned long NOTIFY_INTERVAL_MS = 1000;
@@ -79,12 +77,12 @@ static void ftmsNotifyCallback(NimBLERemoteCharacteristic* pChar,
 }
 
 // ── Target device (hardcoded SM-420) ──────────────────────────────
-static const NimBLEAddress SM420_ADDRESS("24:00:0c:a0:7c:60");
+static const NimBLEAddress TARGET_ADDRESS(BIKE_MAC);
 
 // ── Scan callbacks ────────────────────────────────────────────────
 class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice* device) override {
-        if (device->getAddress() == SM420_ADDRESS) {
+        if (device->getAddress() == TARGET_ADDRESS) {
             LOG("Scan: found SM-420! RSSI=%d", device->getRSSI());
             NimBLEDevice::getScan()->stop();
             g_targetDevice = device;
@@ -188,7 +186,7 @@ static bool connectToFtms() {
 
 // ── Scan for SM-420 ───────────────────────────────────────────────
 static void startScan() {
-    LOG("Scanning for SM-420 (%s)...", SM420_ADDRESS.toString().c_str());
+    LOG("Scanning for SM-420 (%s)...", TARGET_ADDRESS.toString().c_str());
     NimBLEScan* pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(new ScanCallbacks(), false);
     pScan->setActiveScan(true);
@@ -263,9 +261,10 @@ static void updateLed() {
 void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
-    LOG("SM420 Bridge starting...");
+    g_csc.wheelCircumferenceM = WHEEL_CIRC_MM / 1000.0f;
+    LOG("%s starting...", BRIDGE_NAME);
 
-    NimBLEDevice::init("SM420 Bridge");
+    NimBLEDevice::init(BRIDGE_NAME);
     setupBleServer();
     startScan();
 }
