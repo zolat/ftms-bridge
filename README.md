@@ -7,12 +7,11 @@ Spin Bike ──BLE──> ESP32 ──BLE──> Apple Watch
  (FTMS)            Bridge         Speed + Cadence + Power
 ```
 
-Most spin bikes broadcast their data over a Bluetooth protocol called FTMS.
-Apple Watch doesn't speak FTMS. This tiny bridge sits in the middle, picks up
-your bike's speed, cadence, and power, and re-broadcasts it in the format your
-Watch already understands.
+Most spin bikes broadcast data over a Bluetooth protocol called FTMS.
+Apple Watch doesn't speak FTMS. This bridge sits in the middle and
+re-broadcasts speed, cadence, and power in a format the Watch understands.
 
-Plug in the ESP32, start pedaling, and your Watch just sees a bike sensor.
+The Watch just sees a regular bike sensor.
 
 
 ## What You Need
@@ -38,7 +37,7 @@ pio run -e esp32dev -t upload
 
 ### a) Install PlatformIO
 
-The easiest path is VS Code with the PlatformIO extension:
+The simplest option is VS Code with the PlatformIO extension:
 
 https://platformio.org/install/ide?install=vscode
 
@@ -97,7 +96,7 @@ pio run -e esp32dev -t upload --upload-port COM3
 2. Wait for the LED to go solid (see below).
 3. On your Apple Watch, go to **Settings > Bluetooth** and connect to **SM420 Bridge** (or whatever you set `BRIDGE_NAME` to).
 4. Open a cycling app on your Watch -- Apple Workouts, Strava, Wahoo, whatever you like.
-5. It should pick up speed, cadence, and power automatically. Ride!
+5. It should pick up speed, cadence, and power automatically.
 
 
 ## LED Status
@@ -106,7 +105,7 @@ pio run -e esp32dev -t upload --upload-port COM3
 |---|---|
 | Slow blink (1 Hz) | Scanning for your bike |
 | Fast blink (4 Hz) | Connected to bike, waiting for Watch |
-| Solid on | Bridge active -- both sides connected, ride! |
+| Solid on | Bridge active -- both sides connected |
 
 
 ## Troubleshooting
@@ -148,8 +147,8 @@ This firmware was built for and tested on the **Lifespan SM-420**. It should wor
 with any bike that broadcasts FTMS Indoor Bike Data, but every bike is a little
 different.
 
-If you get it working with another bike, please open an issue or PR -- we'd love to
-add it to a compatibility list.
+If you get it working with another bike, open an issue or PR and we'll add it to
+a compatibility list.
 
 
 ## License
