@@ -8,8 +8,8 @@ Spin Bike ──BLE──> ESP32 ──BLE──> Apple Watch
 ```
 
 Most spin bikes broadcast data over a Bluetooth protocol called FTMS.
-Apple Watch doesn't speak FTMS. This bridge sits in the middle and
-re-broadcasts speed, cadence, and power in a format the Watch understands.
+Apple Watch doesn't work with FTMS. This bridge sits in the middle and
+re-broadcasts speed, cadence, and power in a format the Apple Watch can use.
 
 The Watch just sees a regular bike sensor.
 
