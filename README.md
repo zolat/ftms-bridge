@@ -1,4 +1,4 @@
-# Cycle Bridge
+# FTMS to Apple Watch Bridge
 
 ESP32 firmware that connects your spin bike to your Apple Watch.
 
