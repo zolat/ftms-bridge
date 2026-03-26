@@ -2,6 +2,7 @@
 #include <NimBLEDevice.h>
 #include "ftms_bridge.h"
 #include "config.h"
+#include "display.h"
 
 #if DEBUG_LOG
   #define LOG(fmt, ...) Serial.printf(fmt "\n", ##__VA_ARGS__)
@@ -41,6 +42,16 @@ static NimBLECharacteristic* g_pCscMeas      = nullptr;
 static NimBLECharacteristic* g_pCpMeas       = nullptr;
 static volatile bool         g_watchConnected = false;
 static CscAccumulator        g_csc;
+
+// ── Display ──────────────────────────────────────────────────────
+#if DISPLAY_ENABLED
+static BridgeDisplay g_display;
+#endif
+
+// ── Session tracking ─────────────────────────────────────────────
+static float          g_distanceKm   = 0.0f;
+static unsigned long  g_sessionStart = 0;
+static bool           g_sessionActive = false;
 
 // ── Timing ────────────────────────────────────────────────────────
 static unsigned long g_lastNotify = 0;
@@ -264,6 +275,15 @@ void setup() {
     g_csc.wheelCircumferenceM = WHEEL_CIRC_MM / 1000.0f;
     LOG("%s starting...", BRIDGE_NAME);
 
+    #if DISPLAY_ENABLED
+    if (g_display.begin()) {
+        LOG("Display: initialized");
+        g_display.showStartup(BRIDGE_NAME);
+    } else {
+        LOG("Display: init failed");
+    }
+    #endif
+
     NimBLEDevice::init(BRIDGE_NAME);
     setupBleServer();
     startScan();
@@ -295,7 +315,27 @@ void loop() {
             float speedKmh   = g_hasSpeed   ? (g_speedRaw / 100.0f)  : 0.0f;
             float cadenceRpm = g_hasCadence ? (g_cadenceRaw / 2.0f)  : 0.0f;
 
+            // Start session clock on first real data
+            if (!g_sessionActive && speedKmh > 0.5f) {
+                g_sessionActive = true;
+                g_sessionStart = now;
+            }
+
+            // Accumulate distance
+            if (speedKmh > 0.0f) {
+                float distKm = (speedKmh / 3600.0f) * (deltaMs / 1000.0f);
+                g_distanceKm += distKm;
+            }
+
             updateCsc(g_csc, speedKmh, cadenceRpm, deltaMs);
+
+            unsigned long elapsed = g_sessionActive ? (now - g_sessionStart) : 0;
+
+            #if DISPLAY_ENABLED
+            g_display.update(g_ftmsConnected, g_watchConnected,
+                             speedKmh, cadenceRpm, g_power,
+                             g_distanceKm, elapsed);
+            #endif
 
             if (g_watchConnected) {
                 if (g_pCscMeas) {

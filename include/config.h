@@ -18,4 +18,13 @@
 // GPIO pin for the onboard status LED (2 on most ESP32 dev boards).
 #define LED_PIN          2
 
+// ── Display Settings ───────────────────────────────────────────
+// SSD1306 OLED (128x64) on I2C. Set to 0 to disable display.
+#define DISPLAY_ENABLED  1
+#define DISPLAY_SDA      21
+#define DISPLAY_SCL      22
+#define DISPLAY_ADDR     0x3C
+#define DISPLAY_WIDTH    128
+#define DISPLAY_HEIGHT   64
+
 #endif // CONFIG_H
