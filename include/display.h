@@ -16,13 +16,17 @@ public:
         if (!m_oled.begin(SSD1306_SWITCHCAPVCC, DISPLAY_ADDR)) {
             return false;
         }
+        m_ready = true;
         m_oled.clearDisplay();
         m_oled.setTextColor(SSD1306_WHITE);
         m_oled.display();
         return true;
     }
 
+    bool ready() const { return m_ready; }
+
     void showStartup(const char* name) {
+        if (!m_ready) return;
         m_oled.clearDisplay();
         m_oled.setTextSize(1);
         m_oled.setCursor(0, 0);
@@ -35,6 +39,7 @@ public:
     void update(bool bikeConnected, bool watchConnected,
                 float speedKmh, float cadenceRpm, int16_t powerW,
                 float distanceKm, unsigned long elapsedMs) {
+        if (!m_ready) return;
         m_oled.clearDisplay();
 
         // ── Status bar (y=0, 8px) ─────────────────────────────
@@ -118,6 +123,7 @@ public:
 
 private:
     Adafruit_SSD1306 m_oled{DISPLAY_WIDTH, DISPLAY_HEIGHT, &Wire, -1};
+    bool m_ready = false;
 };
 
 #endif // DISPLAY_ENABLED
