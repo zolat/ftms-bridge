@@ -53,6 +53,19 @@ static float          g_distanceKm   = 0.0f;
 static unsigned long  g_sessionStart = 0;
 static bool           g_sessionActive = false;
 
+// ── Button (session reset) ───────────────────────────────────────
+static unsigned long g_lastButtonPress = 0;
+static const unsigned long DEBOUNCE_MS = 300;
+
+static void resetSession() {
+    g_distanceKm = 0.0f;
+    g_sessionStart = 0;
+    g_sessionActive = false;
+    g_csc = CscAccumulator();
+    g_csc.wheelCircumferenceM = WHEEL_CIRC_MM / 1000.0f;
+    LOG("Session reset");
+}
+
 // ── Timing ────────────────────────────────────────────────────────
 static unsigned long g_lastNotify = 0;
 static const unsigned long NOTIFY_INTERVAL_MS = 1000;
@@ -272,6 +285,7 @@ static void updateLed() {
 void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
     g_csc.wheelCircumferenceM = WHEEL_CIRC_MM / 1000.0f;
     LOG("%s starting...", BRIDGE_NAME);
 
@@ -303,6 +317,12 @@ void loop() {
             delay(5000);
             startScan();
         }
+    }
+
+    // Button: reset session stats
+    if (digitalRead(BUTTON_PIN) == LOW && (millis() - g_lastButtonPress) > DEBOUNCE_MS) {
+        g_lastButtonPress = millis();
+        resetSession();
     }
 
     // 1 Hz CSC/CP notifications

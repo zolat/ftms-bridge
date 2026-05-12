@@ -18,6 +18,9 @@
 // GPIO pin for the onboard status LED (2 on most ESP32 dev boards).
 #define LED_PIN          2
 
+// GPIO0 = BOOT button on most ESP32 dev boards. Press to reset session stats.
+#define BUTTON_PIN       0
+
 // ── Display Settings ───────────────────────────────────────────
 // SSD1306 OLED (128x64) on I2C. Set to 0 to disable display.
 #define DISPLAY_ENABLED  1
