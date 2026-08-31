@@ -160,33 +160,24 @@ Make sure you are on this version of the firmware. Older builds sent power on it
 with no crank data, and Garmin reads a power meter's cadence out of those crank fields.
 Delete the sensor on the watch and pair it again after flashing.
 
-**Garmin finds the bridge but won't connect**
-There's a decision table for reading the debug trace in
-[docs/garmin-debug.md](docs/garmin-debug.md). In short, in order:
+**Garmin connects then immediately disconnects, or reports "too many devices already connected"**
+The watch is asking to bond and being refused. Check `ENABLE_BONDING` is `1` in
+`config.h` -- it is by default, because the Instinct 3 requires it. Delete the sensor
+on the watch and pair again after reflashing; Garmin holds on to half-finished pairing
+records and a stale one will fail for its own reasons.
 
-1. Update the watch firmware. Garmin has shipped fixes for Bluetooth sensor
-   connectivity -- Instinct 3 got one in 9.25.
-2. Delete any existing entry for the bridge on the watch and re-add it.
-3. Flash the debug build and capture what happens:
-   ```bash
-   pio run -e esp32dev-debug -t upload
-   pio device monitor
-   ```
-   It logs every Bluetooth event, so you can see how far the watch got -- whether it
-   negotiated an MTU, whether it tried to pair, and where it gave up.
-4. Try `ENABLE_CSC 0` in `config.h`. Some watches count one device advertising two
-   sensor profiles against their own sensor limit. **This is a test, not a setting to
-   leave on** -- it stops the Apple Watch seeing cadence.
-5. Try `ENABLE_BONDING 1` if the log shows the watch attempting to pair.
+If that isn't it, capture what actually happens rather than guessing -- see
+[docs/garmin-debug.md](docs/garmin-debug.md):
 
-**Speed or cadence values seem wrong**
-Check `WHEEL_CIRC_MM` in `config.h`. The default (2096 mm) matches a 700x25c road
-tire. If your bike or trainer expects a different wheel size, adjust accordingly.
+```bash
+pio run -e esp32dev-debug -t upload
+pio device monitor
+```
 
-**Upload fails**
-Try holding the **BOOT** button on the ESP32 while the upload starts. Also double-check
-that your USB cable supports data -- cheap cables often only carry power.
-
+**Only two watches can be connected at once**
+The ESP32 radio allows three Bluetooth links and the bike holds one. Garmin watches
+reconnect to saved sensors on their own, so a watch in the next room may be using a
+slot. The OLED shows `W:1` / `W:2`; hold **BOOT** for 2 seconds to drop them all.
 
 ## How It Works
 

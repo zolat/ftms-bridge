@@ -1,5 +1,12 @@
 # Debugging a watch that finds the bridge but won't connect
 
+> **Already solved once:** the Garmin Instinct 3 requires bonding. It connected, asked
+> to pair, was refused (`encrypted=0 bonded=0`) and dropped the link 4 seconds later,
+> which the watch reported as "too many devices already connected". `ENABLE_BONDING 1`
+> fixed it and is now the default. The Epix Gen 2 never asks to bond, which is why the
+> two watches failed for completely different reasons. The rest of this guide is for
+> the next watch that misbehaves.
+
 The Garmin Instinct 3 discovers **SM420 Bridge**, you select it, and it refuses with
 "too many devices already connected" -- with nothing else connected to the ESP32 and
 two connection slots free. This is how to find out why rather than guess.
@@ -42,7 +49,7 @@ Find the last thing that happened before `BLE_GAP_EVENT_DISCONNECT`.
 |---|---|---|
 | `CONNECT`, then nothing, then `DISCONNECT` | The watch connected and dropped before doing anything. Not a GATT problem -- it decided against the connection itself. | Update the watch firmware. Instinct 3 shipped a Bluetooth sensor connectivity fix in 9.25. |
 | `CONNECT`, `MTU`, then `DISCONNECT` with no `SUBSCRIBE` | It got as far as reading the GATT table and didn't like what it found. | This is the case the new Device Information, Battery and Control Point services address. If it still fails here, try `ENABLE_CSC 0` -- some watches count one device advertising two sensor profiles against their own limit. |
-| `ENC_CHANGE`, `PASSKEY_ACTION` or `REPEAT_PAIRING` appears | The watch is trying to pair, and being refused. | Set `ENABLE_BONDING 1` in `config.h` and reflash. Also check for a `Server: pairing complete` line -- `encrypted=0` means it failed. |
+| `Server: pairing complete` with `encrypted=0 bonded=0`, then a disconnect | The watch asked to bond and was refused. **This was the Instinct 3.** | `ENABLE_BONDING 1` (now the default). Delete the sensor on the watch before retrying -- a half-finished pairing record will fail on its own. A good result reads `encrypted=1 bonded=1` followed by `0x2a63 subscribed`. |
 | `SUBSCRIBE` happens, then it disconnects | It got everything it needed and left anyway. | Look at what the bridge sent next -- check the `CP: flags=...` line looks sane. |
 | No `CONNECT` at all | The watch never reached us; the error is entirely watch-side. | Check the bridge is advertising: `w:0` on the OLED with a fast-blinking LED. Hold BOOT for 2 seconds to force a restart of advertising. |
 

@@ -39,9 +39,10 @@
 #define ENABLE_CPS       1
 #define ENABLE_CSC       1
 
-// Just Works bonding. Off matches what the Apple Watch has always worked with.
-// Try 1 if a watch attempts pairing and then drops the connection.
-#define ENABLE_BONDING   0
+// Just Works bonding, no passkey. Required by the Instinct 3, which asks to bond and
+// drops the connection if refused. The Epix and Apple Watch never ask, and bonding
+// being available doesn't force them to use it -- so leave this on.
+#define ENABLE_BONDING   1
 
 // How many watches may connect at once. The ESP32 radio allows 3 BLE links in total
 // and the bike takes one, so 2 is the ceiling.
