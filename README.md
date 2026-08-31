@@ -161,7 +161,8 @@ with no crank data, and Garmin reads a power meter's cadence out of those crank 
 Delete the sensor on the watch and pair it again after flashing.
 
 **Garmin finds the bridge but won't connect**
-In order:
+There's a decision table for reading the debug trace in
+[docs/garmin-debug.md](docs/garmin-debug.md). In short, in order:
 
 1. Update the watch firmware. Garmin has shipped fixes for Bluetooth sensor
    connectivity -- Instinct 3 got one in 9.25.

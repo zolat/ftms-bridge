@@ -326,6 +326,59 @@ void test_cp_notifies_cadence_without_power() {
     TEST_ASSERT_EQUAL_UINT16(1, rd16(&buf[4]));
 }
 
+// The SM-420 splits its data across notifications: one carries speed and cadence, the
+// next carries power with the "More Data" bit set so instantaneous speed is absent.
+// Getting that bit backwards would shift every field that follows.
+void test_parse_power_only_notification() {
+    uint8_t data[] = {0x41, 0x00, 0xC8, 0x00};  // More Data + instantaneous power
+    FtmsIndoorBikeData result;
+    TEST_ASSERT_TRUE(parseFtmsIndoorBikeData(data, sizeof(data), result));
+    TEST_ASSERT_FALSE(result.hasSpeed);
+    TEST_ASSERT_FALSE(result.hasCadence);
+    TEST_ASSERT_TRUE(result.hasPower);
+    TEST_ASSERT_EQUAL_INT16(200, result.instantPower);
+}
+
+// Sweep the range a rider actually covers and check the numbers a watch computes from
+// the Cycling Power stream match what the bike reported. The event times quantise to
+// whole 1/1024 s ticks, so a little error is inherent -- this pins how much.
+void test_cp_decoded_values_across_range() {
+    for (int rpm = 40; rpm <= 130; rpm += 10) {
+        CscAccumulator csc;
+        csc.wheelCircumferenceM = 2.096f;
+        uint8_t first[16], last[16];
+
+        updateCsc(csc, 0.0f, (float)rpm, 1000);
+        buildCpMeasurement(first, 0, csc, false, true);
+        for (int i = 0; i < 20; i++) updateCsc(csc, 0.0f, (float)rpm, 1000);
+        buildCpMeasurement(last, 0, csc, false, true);
+
+        uint16_t dRevs = (uint16_t)(rd16(&last[4]) - rd16(&first[4]));
+        uint16_t dTime = (uint16_t)(rd16(&last[6]) - rd16(&first[6]));
+        TEST_ASSERT_TRUE(dTime > 0);
+        float decoded = (float)dRevs * 1024.0f * 60.0f / (float)dTime;
+        TEST_ASSERT_FLOAT_WITHIN(0.5f, (float)rpm, decoded);
+    }
+
+    for (int kmh = 5; kmh <= 60; kmh += 5) {
+        CscAccumulator csc;
+        csc.wheelCircumferenceM = 2.096f;
+        uint8_t first[16], last[16];
+
+        updateCsc(csc, (float)kmh, 0.0f, 1000);
+        buildCpMeasurement(first, 0, csc, true, false);
+        for (int i = 0; i < 20; i++) updateCsc(csc, (float)kmh, 0.0f, 1000);
+        buildCpMeasurement(last, 0, csc, true, false);
+
+        uint32_t dRevs = rd32(&last[4]) - rd32(&first[4]);
+        uint16_t dTime = (uint16_t)(rd16(&last[8]) - rd16(&first[8]));
+        TEST_ASSERT_TRUE(dTime > 0);
+        float revsPerSec = (float)dRevs * 2048.0f / (float)dTime;
+        float decoded = revsPerSec * csc.wheelCircumferenceM * 3.6f;
+        TEST_ASSERT_FLOAT_WITHIN(kmh * 0.01f + 0.05f, (float)kmh, decoded);
+    }
+}
+
 void test_csc_custom_wheel_circumference() {
     CscAccumulator csc;
     csc.wheelCircumferenceM = 1.0f;  // 1 meter wheel = easy math
@@ -363,6 +416,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cp_cadence_and_speed_recoverable);
     RUN_TEST(test_end_to_end_ftms_to_cp);
     RUN_TEST(test_cp_notifies_cadence_without_power);
+    RUN_TEST(test_parse_power_only_notification);
+    RUN_TEST(test_cp_decoded_values_across_range);
     RUN_TEST(test_csc_custom_wheel_circumference);
     return UNITY_END();
 }
