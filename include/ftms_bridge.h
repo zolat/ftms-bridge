@@ -145,12 +145,65 @@ inline size_t buildCscMeasurement(uint8_t* buf, const CscAccumulator& csc,
     return pos;
 }
 
-inline size_t buildCpMeasurement(uint8_t* buf, int16_t powerWatts) {
-    buf[0] = 0x00;
-    buf[1] = 0x00;
-    buf[2] = (uint8_t)( powerWatts       & 0xFF);
-    buf[3] = (uint8_t)((powerWatts >> 8) & 0xFF);
+// ── Cycling Power Service (0x1818) ────────────────────────────────
+// Cycling Power Feature (0x2A65) bits, per the Bluetooth SIG Cycling Power Service.
+static const uint32_t CP_FEATURE_WHEEL_REV = 0x00000004;  // bit 2
+static const uint32_t CP_FEATURE_CRANK_REV = 0x00000008;  // bit 3
+
+// Cycling Power Measurement (0x2A63) flag bits.
+static const uint16_t CP_FLAG_WHEEL_REV = 0x0010;  // bit 4
+static const uint16_t CP_FLAG_CRANK_REV = 0x0020;  // bit 5
+
+// Cycling Power Feature goes on the wire as a little-endian uint32. Writing it
+// big-endian sets bit 27 instead of bit 3 and the watch silently drops cadence.
+inline size_t serializeCpFeature(uint8_t* buf, uint32_t features) {
+    buf[0] =  features        & 0xFF;
+    buf[1] = (features >>  8) & 0xFF;
+    buf[2] = (features >> 16) & 0xFF;
+    buf[3] = (features >> 24) & 0xFF;
     return 4;
+}
+
+// Cycling Power Measurement. Field order is fixed by the spec: flags, instantaneous
+// power, wheel data, crank data.
+//
+// A Garmin (or any head unit) that pairs this as a power meter reads cadence from the
+// crank fields here, not from CSC -- which is why they have to be present.
+//
+// Watch the units: the CPS wheel event time is 1/2048 s, while the crank event time
+// here and everything in CSC is 1/1024 s. Doubling the accumulator's 1/1024 s value is
+// correct, including across the uint16 wrap.
+inline size_t buildCpMeasurement(uint8_t* buf, int16_t powerWatts,
+                                 const CscAccumulator& csc,
+                                 bool includeWheel, bool includeCrank) {
+    uint16_t flags = 0;
+    if (includeWheel) flags |= CP_FLAG_WHEEL_REV;
+    if (includeCrank) flags |= CP_FLAG_CRANK_REV;
+
+    size_t pos = 0;
+    buf[pos++] =  flags       & 0xFF;
+    buf[pos++] = (flags >> 8) & 0xFF;
+
+    uint16_t power = (uint16_t)powerWatts;
+    buf[pos++] =  power       & 0xFF;
+    buf[pos++] = (power >> 8) & 0xFF;
+
+    if (includeWheel) {
+        buf[pos++] =  csc.cumulativeWheelRevs        & 0xFF;
+        buf[pos++] = (csc.cumulativeWheelRevs >> 8)  & 0xFF;
+        buf[pos++] = (csc.cumulativeWheelRevs >> 16) & 0xFF;
+        buf[pos++] = (csc.cumulativeWheelRevs >> 24) & 0xFF;
+        uint16_t wheelTime2048 = (uint16_t)(csc.lastWheelEventTime * 2);
+        buf[pos++] =  wheelTime2048       & 0xFF;
+        buf[pos++] = (wheelTime2048 >> 8) & 0xFF;
+    }
+    if (includeCrank) {
+        buf[pos++] =  csc.cumulativeCrankRevs        & 0xFF;
+        buf[pos++] = (csc.cumulativeCrankRevs >> 8)  & 0xFF;
+        buf[pos++] =  csc.lastCrankEventTime         & 0xFF;
+        buf[pos++] = (csc.lastCrankEventTime >> 8)   & 0xFF;
+    }
+    return pos;
 }
 
 #endif // FTMS_BRIDGE_H

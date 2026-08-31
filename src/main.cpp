@@ -20,6 +20,18 @@ static const NimBLEUUID SENSOR_LOCATION_UUID((uint16_t)0x2A5D);
 static const NimBLEUUID CP_SERVICE_UUID((uint16_t)0x1818);
 static const NimBLEUUID CP_MEASUREMENT_UUID((uint16_t)0x2A63);
 static const NimBLEUUID CP_FEATURE_UUID((uint16_t)0x2A65);
+static const NimBLEUUID CP_CONTROL_POINT_UUID((uint16_t)0x2A66);
+static const NimBLEUUID DIS_SERVICE_UUID((uint16_t)0x180A);
+static const NimBLEUUID DIS_MANUFACTURER_UUID((uint16_t)0x2A29);
+static const NimBLEUUID DIS_MODEL_UUID((uint16_t)0x2A24);
+static const NimBLEUUID DIS_FIRMWARE_UUID((uint16_t)0x2A26);
+static const NimBLEUUID BATTERY_SERVICE_UUID((uint16_t)0x180F);
+static const NimBLEUUID BATTERY_LEVEL_UUID((uint16_t)0x2A19);
+
+// Appearance: Cycling: Power Sensor. Watches use it as a hint about what we are.
+static const uint16_t APPEARANCE_CYCLING_POWER_SENSOR = 0x0484;
+
+static const char* FIRMWARE_REVISION = "1.1.0";
 
 // ── FTMS client state (written by BLE callback, read by loop) ────
 static volatile bool     g_ftmsConnected  = false;
@@ -40,8 +52,13 @@ static NimBLEClient* g_pClient = nullptr;
 static NimBLEServer*         g_pServer       = nullptr;
 static NimBLECharacteristic* g_pCscMeas      = nullptr;
 static NimBLECharacteristic* g_pCpMeas       = nullptr;
-static volatile bool         g_watchConnected = false;
 static CscAccumulator        g_csc;
+
+// How many watches are connected right now. The bike is a client link, so it is not
+// counted here.
+static uint8_t connectedCentrals() {
+    return g_pServer ? (uint8_t)g_pServer->getConnectedCount() : 0;
+}
 
 // ── Display ──────────────────────────────────────────────────────
 #if DISPLAY_ENABLED
@@ -53,9 +70,12 @@ static float          g_distanceKm   = 0.0f;
 static unsigned long  g_sessionStart = 0;
 static bool           g_sessionActive = false;
 
-// ── Button (session reset) ───────────────────────────────────────
-static unsigned long g_lastButtonPress = 0;
-static const unsigned long DEBOUNCE_MS = 300;
+// ── Button (short press: reset stats, long press: drop watches) ──
+static unsigned long g_buttonDownAt   = 0;
+static bool          g_buttonWasDown  = false;
+static bool          g_longPressFired = false;
+static const unsigned long DEBOUNCE_MS   = 50;
+static const unsigned long LONG_PRESS_MS = 2000;
 
 static void resetSession() {
     g_distanceKm = 0.0f;
@@ -130,17 +150,108 @@ class ClientCallbacks : public NimBLEClientCallbacks {
 };
 
 // ── Server callbacks ──────────────────────────────────────────────
+// These log more than they strictly need to. A watch that finds the bridge but
+// refuses to connect leaves a trail here -- how far it got, whether it negotiated an
+// MTU, whether it tried to pair -- which is the difference between diagnosing the
+// problem and guessing at it.
 class ServerCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
-        LOG("Server: Watch connected");
-        g_watchConnected = true;
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
+        LOG("Server: watch connected  peer=%s  %u/%u",
+            NimBLEAddress(desc->peer_ota_addr).toString().c_str(),
+            (unsigned)pServer->getConnectedCount(), (unsigned)MAX_CENTRALS);
+
+        // NimBLE stops advertising once a central connects and does not resume on its
+        // own. Without this the bridge only ever accepts one watch per boot.
+        if (pServer->getConnectedCount() < MAX_CENTRALS) {
+            NimBLEDevice::startAdvertising();
+        }
     }
-    void onDisconnect(NimBLEServer* pServer) override {
-        LOG("Server: Watch disconnected");
-        g_watchConnected = false;
-        NimBLEDevice::startAdvertising();
+    void onDisconnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
+        LOG("Server: watch disconnected  peer=%s  %u/%u",
+            NimBLEAddress(desc->peer_ota_addr).toString().c_str(),
+            (unsigned)pServer->getConnectedCount(), (unsigned)MAX_CENTRALS);
+    }
+    void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
+        LOG("Server: MTU=%u  peer=%s", MTU,
+            NimBLEAddress(desc->peer_ota_addr).toString().c_str());
+    }
+    void onAuthenticationComplete(ble_gap_conn_desc* desc) override {
+        LOG("Server: pairing complete  encrypted=%d authenticated=%d bonded=%d",
+            desc->sec_state.encrypted, desc->sec_state.authenticated,
+            desc->sec_state.bonded);
     }
 };
+
+// ── Characteristic callbacks ──────────────────────────────────────
+// Whether a watch reached the point of enabling notifications, or gave up earlier.
+class NotifyCallbacks : public NimBLECharacteristicCallbacks {
+    void onSubscribe(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc,
+                     uint16_t subValue) override {
+        LOG("Server: %s %s  peer=%s",
+            pChar->getUUID().toString().c_str(),
+            subValue == 0 ? "unsubscribed" : "subscribed",
+            NimBLEAddress(desc->peer_ota_addr).toString().c_str());
+    }
+};
+
+// Every real power meter exposes a control point. We support no opcodes, but we answer
+// properly rather than leaving a head unit waiting on service discovery.
+class CpControlPointCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pChar) override {
+        std::string req = pChar->getValue();
+        uint8_t opcode  = req.empty() ? 0 : (uint8_t)req[0];
+        // Response Code, request opcode, Op Code Not Supported.
+        uint8_t rsp[3] = {0x20, opcode, 0x02};
+        pChar->indicate(rsp, sizeof(rsp));
+        LOG("CP Control Point: opcode 0x%02X -> not supported", opcode);
+    }
+};
+
+// ── Recovery helpers ──────────────────────────────────────────────
+static void dropAllCentrals() {
+    if (!g_pServer) return;
+    std::vector<uint16_t> peers = g_pServer->getPeerDevices();
+    LOG("Button: dropping %u connected watch(es)", (unsigned)peers.size());
+    for (size_t i = 0; i < peers.size(); i++) {
+        g_pServer->disconnect(peers[i]);
+    }
+    NimBLEDevice::startAdvertising();
+}
+
+// Belt and braces: if a slot is free but the radio is not advertising, a watch has no
+// way back in. Cheap to check, and it covers whatever stopped it.
+static void ensureAdvertising() {
+    static unsigned long lastCheck = 0;
+    unsigned long now = millis();
+    if (now - lastCheck < 5000) return;
+    lastCheck = now;
+
+    if (connectedCentrals() >= MAX_CENTRALS) return;
+    NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
+    if (!pAdv->isAdvertising()) {
+        LOG("Advertising had stopped with %u/%u watches -- restarting",
+            (unsigned)connectedCentrals(), (unsigned)MAX_CENTRALS);
+        pAdv->start();
+    }
+}
+
+static void handleButton() {
+    bool down = (digitalRead(BUTTON_PIN) == LOW);
+    unsigned long now = millis();
+
+    if (down && !g_buttonWasDown) {
+        g_buttonDownAt   = now;
+        g_longPressFired = false;
+    } else if (down && !g_longPressFired && (now - g_buttonDownAt) >= LONG_PRESS_MS) {
+        g_longPressFired = true;
+        dropAllCentrals();
+    } else if (!down && g_buttonWasDown) {
+        if (!g_longPressFired && (now - g_buttonDownAt) >= DEBOUNCE_MS) {
+            resetSession();
+        }
+    }
+    g_buttonWasDown = down;
+}
 
 // ── Connect to FTMS device ────────────────────────────────────────
 static bool connectToFtms() {
@@ -219,60 +330,106 @@ static void startScan() {
     pScan->start(10, false);
 }
 
-// ── BLE server setup ──────────────────────────────────────────────
+// ── BLE server setup ────────────────────────────────────────
+
+// Real sensors publish who they are and how much battery they have left. Some watches
+// will discover a device without them and then refuse to use it, so we provide both.
+static void setupDeviceInfoService() {
+    NimBLEService* pDis = g_pServer->createService(DIS_SERVICE_UUID);
+    pDis->createCharacteristic(DIS_MANUFACTURER_UUID, NIMBLE_PROPERTY::READ)
+        ->setValue(std::string("ftms-bridge"));
+    pDis->createCharacteristic(DIS_MODEL_UUID, NIMBLE_PROPERTY::READ)
+        ->setValue(std::string(BRIDGE_NAME));
+    pDis->createCharacteristic(DIS_FIRMWARE_UUID, NIMBLE_PROPERTY::READ)
+        ->setValue(std::string(FIRMWARE_REVISION));
+    pDis->start();
+}
+
+static void setupBatteryService() {
+    NimBLEService* pBat = g_pServer->createService(BATTERY_SERVICE_UUID);
+    NimBLECharacteristic* pLevel = pBat->createCharacteristic(
+        BATTERY_LEVEL_UUID, NIMBLE_PROPERTY::READ);
+    uint8_t level = 100;  // USB powered — always full
+    pLevel->setValue(&level, 1);
+    pBat->start();
+}
+
 static void setupBleServer() {
     g_pServer = NimBLEDevice::createServer();
     g_pServer->setCallbacks(new ServerCallbacks());
+    g_pServer->advertiseOnDisconnect(true);
 
-    // ── CSC Service ───────────────────────────────────────────────
+    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+
+#if ENABLE_CSC
+    // ── CSC Service ─────────────────────────────────────
     NimBLEService* pCscService = g_pServer->createService(CSC_SERVICE_UUID);
 
     g_pCscMeas = pCscService->createCharacteristic(
         CSC_MEASUREMENT_UUID, NIMBLE_PROPERTY::NOTIFY);
+    g_pCscMeas->setCallbacks(new NotifyCallbacks());
 
     NimBLECharacteristic* pCscFeature = pCscService->createCharacteristic(
         CSC_FEATURE_UUID, NIMBLE_PROPERTY::READ);
     uint16_t cscFeatures = 0x0003;
     pCscFeature->setValue(cscFeatures);
 
-    uint8_t sensorLoc = 0x00;
-
     NimBLECharacteristic* pCscSensorLoc = pCscService->createCharacteristic(
         SENSOR_LOCATION_UUID, NIMBLE_PROPERTY::READ);
-    pCscSensorLoc->setValue(&sensorLoc, 1);
+    uint8_t cscLoc = 0x00;  // Other
+    pCscSensorLoc->setValue(&cscLoc, 1);
 
     pCscService->start();
+    pAdvertising->addServiceUUID(CSC_SERVICE_UUID);
+#endif
 
-    // ── Cycling Power Service ─────────────────────────────────────
+#if ENABLE_CPS
+    // ── Cycling Power Service ─────────────────────────────
     NimBLEService* pCpService = g_pServer->createService(CP_SERVICE_UUID);
 
     g_pCpMeas = pCpService->createCharacteristic(
         CP_MEASUREMENT_UUID, NIMBLE_PROPERTY::NOTIFY);
+    g_pCpMeas->setCallbacks(new NotifyCallbacks());
 
+    // Declare wheel + crank support. A watch paired with this as a power meter reads
+    // cadence out of the crank fields, and checks these bits before believing them.
     NimBLECharacteristic* pCpFeature = pCpService->createCharacteristic(
         CP_FEATURE_UUID, NIMBLE_PROPERTY::READ);
-    uint32_t cpFeatures = 0x00000000;
-    pCpFeature->setValue(cpFeatures);
+    uint8_t featureBuf[4];
+    size_t featureLen = serializeCpFeature(
+        featureBuf, CP_FEATURE_WHEEL_REV | CP_FEATURE_CRANK_REV);
+    pCpFeature->setValue(featureBuf, featureLen);
 
     NimBLECharacteristic* pCpSensorLoc = pCpService->createCharacteristic(
         SENSOR_LOCATION_UUID, NIMBLE_PROPERTY::READ);
-    pCpSensorLoc->setValue(&sensorLoc, 1);
+    uint8_t cpLoc = 0x05;  // Left Crank — the cadence really is crank-derived
+    pCpSensorLoc->setValue(&cpLoc, 1);
+
+    NimBLECharacteristic* pCpControl = pCpService->createCharacteristic(
+        CP_CONTROL_POINT_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::INDICATE);
+    pCpControl->setCallbacks(new CpControlPointCallbacks());
 
     pCpService->start();
-
-    // ── Advertising ───────────────────────────────────────────────
-    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(CSC_SERVICE_UUID);
     pAdvertising->addServiceUUID(CP_SERVICE_UUID);
+#endif
+
+    setupDeviceInfoService();
+    setupBatteryService();
+
+    // ── Advertising ─────────────────────────────────────
+    // Service UUIDs stay in the advertising payload rather than the scan response --
+    // that is where watches look when deciding what kind of sensor this is.
+    pAdvertising->setAppearance(APPEARANCE_CYCLING_POWER_SENSOR);
     pAdvertising->setScanResponse(true);
     pAdvertising->start();
-    LOG("Server: advertising CSC + CP services");
+    LOG("Server: advertising as \"%s\" (CPS=%d CSC=%d, up to %u watches)",
+        BRIDGE_NAME, ENABLE_CPS, ENABLE_CSC, (unsigned)MAX_CENTRALS);
 }
 
 // ── LED status ────────────────────────────────────────────────────
 static void updateLed() {
     unsigned long now = millis();
-    if (g_ftmsConnected && g_watchConnected) {
+    if (g_ftmsConnected && connectedCentrals() > 0) {
         digitalWrite(LED_PIN, HIGH);
     } else if (g_ftmsConnected) {
         digitalWrite(LED_PIN, (now / 125) % 2);
@@ -299,6 +456,10 @@ void setup() {
     #endif
 
     NimBLEDevice::init(BRIDGE_NAME);
+    // No passkey, and bonding only if the config asks for it. Cycling sensors are
+    // allowed to run unencrypted, and that is what the Apple Watch has always used.
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    NimBLEDevice::setSecurityAuth(ENABLE_BONDING, false, true);
     setupBleServer();
     startScan();
 }
@@ -319,11 +480,8 @@ void loop() {
         }
     }
 
-    // Button: reset session stats
-    if (digitalRead(BUTTON_PIN) == LOW && (millis() - g_lastButtonPress) > DEBOUNCE_MS) {
-        g_lastButtonPress = millis();
-        resetSession();
-    }
+    handleButton();
+    ensureAdvertising();
 
     // 1 Hz CSC/CP notifications
     unsigned long now = millis();
@@ -350,14 +508,15 @@ void loop() {
             updateCsc(g_csc, speedKmh, cadenceRpm, deltaMs);
 
             unsigned long elapsed = g_sessionActive ? (now - g_sessionStart) : 0;
+            uint8_t centrals = connectedCentrals();
 
             #if DISPLAY_ENABLED
-            g_display.update(g_ftmsConnected, g_watchConnected,
+            g_display.update(g_ftmsConnected, centrals,
                              speedKmh, cadenceRpm, g_power,
                              g_distanceKm, elapsed);
             #endif
 
-            if (g_watchConnected) {
+            if (centrals > 0) {
                 if (g_pCscMeas) {
                     uint8_t buf[16];
                     size_t len = buildCscMeasurement(buf, g_csc, g_hasSpeed, g_hasCadence);
@@ -367,12 +526,20 @@ void loop() {
                         g_csc.cumulativeWheelRevs, g_csc.cumulativeCrankRevs);
                 }
 
-                if (g_hasPower && g_pCpMeas) {
-                    uint8_t cpBuf[8];
-                    size_t cpLen = buildCpMeasurement(cpBuf, g_power);
+                if (g_pCpMeas) {
+                    // Always send, even with no power reading. A watch paired with
+                    // this as a power meter takes its cadence from here, so the
+                    // stream has to keep running.
+                    int16_t power = g_hasPower ? g_power : 0;
+                    uint8_t cpBuf[16];
+                    size_t cpLen = buildCpMeasurement(cpBuf, power, g_csc,
+                                                      g_hasSpeed, g_hasCadence);
                     g_pCpMeas->setValue(cpBuf, cpLen);
                     g_pCpMeas->notify();
-                    LOG("CP: power=%d W", g_power);
+                    LOG("CP: flags=0x%04X pwr=%dW crankRevs=%u wheelRevs=%lu",
+                        (unsigned)(cpBuf[0] | (cpBuf[1] << 8)), power,
+                        g_csc.cumulativeCrankRevs,
+                        (unsigned long)g_csc.cumulativeWheelRevs);
                 }
             }
         }

@@ -8,7 +8,10 @@
 // Find it with the nRF Connect app: scan for devices advertising "FTMS".
 #define BIKE_MAC         "24:00:0c:a0:7c:60"
 
-// Name your Apple Watch will see when pairing.
+// Name your watch will see when pairing.
+// Keep it to 16 characters or fewer: past that it no longer fits alongside the service
+// UUIDs in the advertising packet and gets moved to the scan response, where some
+// watches won't show it.
 #define BRIDGE_NAME      "SM420 Bridge"
 
 // Wheel circumference in millimeters.
@@ -18,8 +21,31 @@
 // GPIO pin for the onboard status LED (2 on most ESP32 dev boards).
 #define LED_PIN          2
 
-// GPIO0 = BOOT button on most ESP32 dev boards. Press to reset session stats.
+// GPIO0 = BOOT button on most ESP32 dev boards.
+// Short press resets session stats; hold 2s to drop all connected watches.
 #define BUTTON_PIN       0
+
+// ── Watch Settings ──────────────────────────────────────────────
+// Which sensor profiles to broadcast.
+//
+// Garmin pairs the bridge as a power meter and reads cadence and speed out of the
+// Cycling Power service. Apple Watch reads cadence from Cycling Speed & Cadence.
+// Both are on by default so either watch works.
+//
+// If a watch finds the bridge but refuses to connect, try ENABLE_CSC 0 as a test --
+// some watches count one device advertising two profiles against their own sensor
+// limit. That build stops the Apple Watch from seeing cadence, so it is a diagnostic,
+// not somewhere to leave things.
+#define ENABLE_CPS       1
+#define ENABLE_CSC       1
+
+// Just Works bonding. Off matches what the Apple Watch has always worked with.
+// Try 1 if a watch attempts pairing and then drops the connection.
+#define ENABLE_BONDING   0
+
+// How many watches may connect at once. The ESP32 radio allows 3 BLE links in total
+// and the bike takes one, so 2 is the ceiling.
+#define MAX_CENTRALS     2
 
 // ── Display Settings ───────────────────────────────────────────
 // SSD1306 OLED (128x64) on I2C. Set to 0 to disable display.

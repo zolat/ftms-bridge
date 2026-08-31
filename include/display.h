@@ -36,7 +36,7 @@ public:
         m_oled.display();
     }
 
-    void update(bool bikeConnected, bool watchConnected,
+    void update(bool bikeConnected, uint8_t watchCount,
                 float speedKmh, float cadenceRpm, int16_t powerW,
                 float distanceKm, unsigned long elapsedMs) {
         if (!m_ready) return;
@@ -47,7 +47,9 @@ public:
         m_oled.setCursor(0, 0);
         m_oled.print(bikeConnected ? "BIKE" : "bike");
         m_oled.setCursor(32, 0);
-        m_oled.print(watchConnected ? "WATCH" : "watch");
+        // Same case convention as BIKE/bike, plus how many watches are on.
+        m_oled.print(watchCount > 0 ? "W:" : "w:");
+        m_oled.print(watchCount);
         m_oled.setCursor(80, 0);
         if (distanceKm < 10.0f) {
             m_oled.print(distanceKm, 2);

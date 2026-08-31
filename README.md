@@ -1,17 +1,17 @@
-# FTMS to Apple Watch Bridge
+# FTMS Bike Bridge
 
-ESP32 firmware that connects your spin bike to your Apple Watch.
+ESP32 firmware that connects your spin bike to your watch.
 
 ```
-Spin Bike ──BLE──> ESP32 ──BLE──> Apple Watch
+Spin Bike ──BLE──> ESP32 ──BLE──> Apple Watch or Garmin
  (FTMS)            Bridge         Speed + Cadence + Power
 ```
 
 Most spin bikes broadcast data over a Bluetooth protocol called FTMS.
-Apple Watch doesn't work with FTMS. This bridge sits in the middle and
-re-broadcasts speed, cadence, and power in a format the Apple Watch can use.
+Watches don't work with FTMS. This bridge sits in the middle and
+re-broadcasts speed, cadence, and power in a format they can use.
 
-The Watch just sees a regular bike sensor.
+The watch just sees a regular bike sensor.
 
 
 ## What You Need
@@ -19,6 +19,7 @@ The Watch just sees a regular bike sensor.
 - **Any ESP32 dev board** (~$5-10 on Amazon or AliExpress)
 - **Micro USB cable** (make sure it carries data, not just power)
 - **A spin bike with FTMS Bluetooth** (tested on the Lifespan SM-420)
+- **An Apple Watch or a Garmin** (tested on Apple Watch and Garmin Epix Gen 2)
 - **nRF Connect app** on your phone (free on iOS and Android) -- you'll use this once to find your bike's Bluetooth address
 
 
@@ -68,8 +69,9 @@ Open `include/config.h` and set your bike's MAC address:
 
 You can also change:
 
-- `BRIDGE_NAME` -- the name your Watch will see (default: `"SM420 Bridge"`)
+- `BRIDGE_NAME` -- the name your watch will see (default: `"SM420 Bridge"`)
 - `WHEEL_CIRC_MM` -- wheel circumference in mm (default: `2096`, which is a 700x25c road tire)
+- `ENABLE_CPS` / `ENABLE_CSC` -- which sensor profiles to broadcast (both on by default)
 
 ### d) Build & Flash
 
@@ -90,22 +92,51 @@ pio run -e esp32dev -t upload --upload-port /dev/cu.usbserial-XXXX
 pio run -e esp32dev -t upload --upload-port COM3
 ```
 
-### e) Pair with Apple Watch
+### e) Pair with Your Watch
 
-1. Power on the ESP32 and your bike.
-2. Wait for the LED to go solid (see below).
-3. On your Apple Watch, go to **Settings > Bluetooth** and connect to **SM420 Bridge** (or whatever you set `BRIDGE_NAME` to).
-4. Open a cycling app on your Watch -- Apple Workouts, Strava, Wahoo, whatever you like.
-5. It should pick up speed, cadence, and power automatically.
+Power on the ESP32 and your bike first, and wait for the LED to stop blinking slowly
+(see below). Then:
+
+**Apple Watch**
+
+1. Go to **Settings > Bluetooth** and connect to **SM420 Bridge** (or whatever you set
+   `BRIDGE_NAME` to).
+2. Open a cycling app -- Apple Workouts, Strava, Wahoo, whatever you like.
+3. It should pick up speed, cadence, and power automatically.
+
+**Garmin**
+
+1. Go to **Settings > Sensors & Accessories > Add New > Search All**.
+2. Pick **SM420 Bridge**.
+3. Garmin pairs the bridge as a **power meter**, and cadence and speed come through it.
+   There is no separate cadence sensor to add -- that is how real power meters work too.
+4. Set the sensor's **wheel size** on the watch to match `WHEEL_CIRC_MM` (2096 mm by
+   default). Indoors there is no GPS to calibrate against, so a mismatch here shows up
+   as wrong speed.
+
+Two watches can be connected at once. The ESP32's radio allows three Bluetooth links in
+total and the bike takes one, so that is the ceiling.
 
 
-## LED Status
+## Status Lights
 
 | LED Pattern | Meaning |
 |---|---|
 | Slow blink (1 Hz) | Scanning for your bike |
-| Fast blink (4 Hz) | Connected to bike, waiting for Watch |
+| Fast blink (4 Hz) | Connected to bike, waiting for a watch |
 | Solid on | Bridge active -- both sides connected |
+
+If you have the OLED fitted, the top-left of the status bar shows `BIKE`/`bike` for the
+bike link and `W:1` for how many watches are connected -- handy for spotting a watch
+that has silently reconnected in your pocket.
+
+
+## Buttons
+
+| Action | Effect |
+|---|---|
+| Short press BOOT | Reset session distance and timer |
+| Hold BOOT 2 seconds | Disconnect every watch and resume advertising |
 
 
 ## Troubleshooting
@@ -119,10 +150,33 @@ Some bikes require an FTMS Control Point handshake before they start sending dat
 This firmware handles that automatically, but if your bike does something unusual it
 may not work out of the box.
 
-**Apple Watch doesn't see the bridge**
-Check that the ESP32 LED is solid (meaning both connections are active). If it's
-still blinking, the bridge hasn't fully connected yet. Try restarting Bluetooth on
-the Watch, or power-cycle the ESP32.
+**My watch doesn't see the bridge**
+Check the ESP32 LED. Slow blink means it is still looking for your bike. If nothing
+shows up at all, hold **BOOT** for 2 seconds -- that drops any watch that reconnected
+silently and restarts advertising.
+
+**Garmin shows power but no cadence**
+Make sure you are on this version of the firmware. Older builds sent power on its own,
+with no crank data, and Garmin reads a power meter's cadence out of those crank fields.
+Delete the sensor on the watch and pair it again after flashing.
+
+**Garmin finds the bridge but won't connect**
+In order:
+
+1. Update the watch firmware. Garmin has shipped fixes for Bluetooth sensor
+   connectivity -- Instinct 3 got one in 9.25.
+2. Delete any existing entry for the bridge on the watch and re-add it.
+3. Flash the debug build and capture what happens:
+   ```bash
+   pio run -e esp32dev-debug -t upload
+   pio device monitor
+   ```
+   It logs every Bluetooth event, so you can see how far the watch got -- whether it
+   negotiated an MTU, whether it tried to pair, and where it gave up.
+4. Try `ENABLE_CSC 0` in `config.h`. Some watches count one device advertising two
+   sensor profiles against their own sensor limit. **This is a test, not a setting to
+   leave on** -- it stops the Apple Watch seeing cadence.
+5. Try `ENABLE_BONDING 1` if the log shows the watch attempting to pair.
 
 **Speed or cadence values seem wrong**
 Check `WHEEL_CIRC_MM` in `config.h`. The default (2096 mm) matches a 700x25c road
@@ -136,9 +190,19 @@ that your USB cable supports data -- cheap cables often only carry power.
 ## How It Works
 
 The ESP32 connects to your bike as a BLE client and reads FTMS Indoor Bike Data
-notifications. It translates speed and cadence into CSC (Cycling Speed and Cadence)
-wheel and crank revolution counts, and forwards power as standard Cycling Power
-measurements. Your Watch connects to the ESP32 as if it were an ordinary bike sensor.
+notifications. It turns speed and cadence into wheel and crank revolution counts and
+broadcasts them two ways:
+
+- **Cycling Power (0x1818)** -- power, plus crank revolutions for cadence and wheel
+  revolutions for speed. This is what Garmin pairs with, and carries everything on its
+  own.
+- **Cycling Speed and Cadence (0x1816)** -- wheel and crank revolutions. This is what
+  the Apple Watch reads cadence from.
+
+Your watch connects to the ESP32 as if it were an ordinary bike sensor.
+
+Running out of connections? The classic ESP32's Bluetooth controller is fixed at three
+links. An ESP32-C3 or S3 allows six if you need more headroom.
 
 
 ## Other FTMS Bikes
